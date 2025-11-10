@@ -1,21 +1,18 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 
 const app = express();
 const port = process.env.PORT || 3000;
-console.log('DB_USER:', process.env.DB_USER);
-console.log('DB_PASS:', process.env.DB_PASS);
 
-// middleware
+
+// Middleware
 app.use(cors());
 app.use(express.json());
 
 // MongoDB URI
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@krishilink-db.jzbgemd.mongodb.net/?appName=krishilink-db`;
- 
 
 const client = new MongoClient(uri, {
   serverApi: {
@@ -25,6 +22,7 @@ const client = new MongoClient(uri, {
   },
 });
 
+// Root Route
 app.get('/', (req, res) => {
   res.send('🌾 KrishiLink Server is running');
 });
@@ -49,7 +47,7 @@ async function run() {
         return res.send({ message: 'User already exists.' });
       }
       const result = await usersCollection.insertOne(user);
-      res.send(result);
+      res.send({ success: true, message: 'User registered successfully', result });
     });
 
     // Get all users (optional)
@@ -96,7 +94,11 @@ async function run() {
       const crop = req.body;
       crop.interests = [];
       const result = await cropsCollection.insertOne(crop);
-      res.send(result);
+      res.status(201).send({
+        success: true,
+        message: 'Crop added successfully!',
+        insertedId: result.insertedId,
+      });
     });
 
     // Update crop info
@@ -117,34 +119,72 @@ async function run() {
         },
       };
       const result = await cropsCollection.updateOne(filter, update);
-      res.send(result);
+      res.send({ success: true, message: 'Crop updated successfully', result });
     });
 
     // Delete crop
     app.delete('/crops/:id', async (req, res) => {
       const id = req.params.id;
       const result = await cropsCollection.deleteOne({ _id: new ObjectId(id) });
-      res.send(result);
+      res.send({ success: true, message: 'Crop deleted successfully', result });
     });
 
     // ========================
     // INTEREST APIs
     // ========================
+// Send interest for a crop
+app.post('/crops/:id/interests', async (req, res) => {
+  const cropId = req.params.id;
+  const interest = req.body;
+  const interestId = new ObjectId();
+  const cropQuery = { _id: new ObjectId(cropId) };
 
-    // Send interest for a crop
-    app.post('/crops/:id/interests', async (req, res) => {
-      const cropId = req.params.id;
-      const interest = req.body;
-      const interestId = new ObjectId();
-      const cropQuery = { _id: new ObjectId(cropId) };
+  // Validation: Quantity must be >= 1
+  if (!interest.quantity || interest.quantity < 1) {
+    return res.status(400).send({ message: 'Quantity must be at least 1.' });
+  }
 
-      // Add ID and default status
-      const newInterest = { _id: interestId, ...interest, status: 'pending' };
+  // Find crop first
+  const crop = await cropsCollection.findOne(cropQuery);
+  if (!crop) {
+    return res.status(404).send({ message: 'Crop not found.' });
+  }
 
-      const update = { $push: { interests: newInterest } };
-      const result = await cropsCollection.updateOne(cropQuery, update);
-      res.send(result);
+  // Prevent owner from sending interest on own crop
+  if (interest.userEmail === crop.owner.ownerEmail) {
+    return res.status(400).send({
+      message: "You cannot send an interest request on your own crop.",
     });
+  }
+
+  // Prevent duplicate interest from the same user
+  const alreadyInterested = crop.interests?.some(
+    (i) => i.userEmail === interest.userEmail
+  );
+  if (alreadyInterested) {
+    return res.status(400).send({
+      message: "You've already sent an interest for this crop.",
+    });
+  }
+
+  
+  const newInterest = {
+    _id: interestId,
+    ...interest,
+    status: interest.status || 'pending',
+  };
+
+  const update = { $push: { interests: newInterest } };
+  const result = await cropsCollection.updateOne(cropQuery, update);
+
+  res.status(201).send({
+    success: true,
+    message: 'Interest submitted successfully!',
+    interestId: interestId,
+    result,
+  });
+});
+
 
     // Get interests received by crop owner
     app.get('/crops/:id/interests', async (req, res) => {
@@ -180,13 +220,18 @@ async function run() {
         );
       }
 
-      res.send(result);
+      res.send({
+        success: true,
+        message: `Interest ${status} successfully.`,
+        result,
+      });
     });
 
     // Get interests sent by a user (My Interests)
     app.get('/my-interests', async (req, res) => {
       const email = req.query.email;
-      if (!email) return res.status(400).send({ message: 'Missing email param' });
+      if (!email)
+        return res.status(400).send({ message: 'Missing email parameter' });
 
       const result = await cropsCollection
         .aggregate([
@@ -207,10 +252,11 @@ async function run() {
       res.send(result);
     });
 
+    // Verify DB connection
     await client.db('admin').command({ ping: 1 });
     console.log('✅ Connected to MongoDB KrishiLink Database');
   } finally {
-    // Keeping connection open for server runtime
+    // Keep connection open
   }
 }
 
