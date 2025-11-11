@@ -6,7 +6,6 @@ const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const app = express();
 const port = process.env.PORT || 3000;
 
-
 // Middleware
 app.use(cors());
 app.use(express.json());
@@ -47,7 +46,11 @@ async function run() {
         return res.send({ message: 'User already exists.' });
       }
       const result = await usersCollection.insertOne(user);
-      res.send({ success: true, message: 'User registered successfully', result });
+      res.send({
+        success: true,
+        message: 'User registered successfully',
+        result,
+      });
     });
 
     // Get all users (optional)
@@ -132,59 +135,59 @@ async function run() {
     // ========================
     // INTEREST APIs
     // ========================
-// Send interest for a crop
-app.post('/crops/:id/interests', async (req, res) => {
-  const cropId = req.params.id;
-  const interest = req.body;
-  const interestId = new ObjectId();
-  const cropQuery = { _id: new ObjectId(cropId) };
+    // Send interest for a crop
+    app.post('/crops/:id/interests', async (req, res) => {
+      const cropId = req.params.id;
+      const interest = req.body;
+      const interestId = new ObjectId();
+      const cropQuery = { _id: new ObjectId(cropId) };
 
-  // Validation: Quantity must be >= 1
-  if (!interest.quantity || interest.quantity < 1) {
-    return res.status(400).send({ message: 'Quantity must be at least 1.' });
-  }
+      // Validation: Quantity must be >= 1
+      if (!interest.quantity || interest.quantity < 1) {
+        return res
+          .status(400)
+          .send({ message: 'Quantity must be at least 1.' });
+      }
 
-  // Find crop first
-  const crop = await cropsCollection.findOne(cropQuery);
-  if (!crop) {
-    return res.status(404).send({ message: 'Crop not found.' });
-  }
+      // Find crop first
+      const crop = await cropsCollection.findOne(cropQuery);
+      if (!crop) {
+        return res.status(404).send({ message: 'Crop not found.' });
+      }
 
-  // Prevent owner from sending interest on own crop
-  if (interest.userEmail === crop.owner.ownerEmail) {
-    return res.status(400).send({
-      message: "You cannot send an interest request on your own crop.",
+      // Prevent owner from sending interest on own crop
+      if (interest.userEmail === crop.owner.ownerEmail) {
+        return res.status(400).send({
+          message: 'You cannot send an interest request on your own crop.',
+        });
+      }
+
+      // Prevent duplicate interest from the same user
+      const alreadyInterested = crop.interests?.some(
+        (i) => i.userEmail === interest.userEmail
+      );
+      if (alreadyInterested) {
+        return res.status(400).send({
+          message: "You've already sent an interest for this crop.",
+        });
+      }
+
+      const newInterest = {
+        _id: interestId,
+        ...interest,
+        status: interest.status || 'pending',
+      };
+
+      const update = { $push: { interests: newInterest } };
+      const result = await cropsCollection.updateOne(cropQuery, update);
+
+      res.status(201).send({
+        success: true,
+        message: 'Interest submitted successfully!',
+        interestId: interestId,
+        result,
+      });
     });
-  }
-
-  // Prevent duplicate interest from the same user
-  const alreadyInterested = crop.interests?.some(
-    (i) => i.userEmail === interest.userEmail
-  );
-  if (alreadyInterested) {
-    return res.status(400).send({
-      message: "You've already sent an interest for this crop.",
-    });
-  }
-
-  
-  const newInterest = {
-    _id: interestId,
-    ...interest,
-    status: interest.status || 'pending',
-  };
-
-  const update = { $push: { interests: newInterest } };
-  const result = await cropsCollection.updateOne(cropQuery, update);
-
-  res.status(201).send({
-    success: true,
-    message: 'Interest submitted successfully!',
-    interestId: interestId,
-    result,
-  });
-});
-
 
     // Get interests received by crop owner
     app.get('/crops/:id/interests', async (req, res) => {
@@ -204,7 +207,10 @@ app.post('/crops/:id/interests', async (req, res) => {
 
       // Update interest status
       const result = await cropsCollection.updateOne(
-        { _id: new ObjectId(cropId), 'interests._id': new ObjectId(interestId) },
+        {
+          _id: new ObjectId(cropId),
+          'interests._id': new ObjectId(interestId),
+        },
         {
           $set: {
             'interests.$.status': status,
@@ -239,6 +245,7 @@ app.post('/crops/:id/interests', async (req, res) => {
           { $match: { 'interests.userEmail': email } },
           {
             $project: {
+              cropId: '$_id',
               cropName: '$name',
               owner: '$owner.ownerName',
               quantity: '$interests.quantity',
