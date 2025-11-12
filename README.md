@@ -68,3 +68,22 @@ Create a `.env` file in the project root and include the following:
 
 -DB_USER=your_mongodb_username
 -DB_PASS=your_mongodb_password
+
+
+---
+
+## 🚀 Local Development
+
+```bash
+# Clone the repository
+git clone https://github.com/y-m-amin/krishiLink-server.git
+
+# Navigate to the folder
+cd krishilink-server
+
+# Install dependencies
+npm install
+
+# Run the server
+nodemon index.js
+
