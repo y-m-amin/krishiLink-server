@@ -260,7 +260,7 @@ async function run() {
     });
 
     // Verify DB connection
-    await client.db('admin').command({ ping: 1 });
+    // await client.db('admin').command({ ping: 1 });
     console.log('✅ Connected to MongoDB KrishiLink Database');
   } finally {
     // Keep connection open
