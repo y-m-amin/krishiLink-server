@@ -74,16 +74,23 @@ Create a `.env` file in the project root and include the following:
 
 ## 🚀 Local Development
 
-```bash
+```sh
 # Clone the repository
 git clone https://github.com/y-m-amin/krishiLink-server.git
+```
 
+```sh
 # Navigate to the folder
 cd krishilink-server
+```
 
+```sh
 # Install dependencies
 npm install
+```
 
+```sh
 # Run the server
 nodemon index.js
+```
 
