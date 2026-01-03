@@ -353,6 +353,10 @@ app.get('/my-interests', verifyJWT, async (req, res) => {
 app.post('/payments/create', verifyJWT, async (req, res) => {
   const { amount, cropId, interestId, sellerId } = req.body;
 
+  if (!amount || !cropId || !interestId || !sellerId) {
+    return sendError(res, 400, 'VALIDATION_ERROR', 'Missing payment data');
+  }
+
   const db = await getDb();
   const payments = db.collection('payments');
 
@@ -361,34 +365,59 @@ app.post('/payments/create', verifyJWT, async (req, res) => {
     return sendError(res, 400, 'DUPLICATE_PAYMENT', 'Already paid');
   }
 
-  const intent = await stripe.paymentIntents.create({
-    amount,
-    currency: 'bdt',
+  const session = await stripe.checkout.sessions.create({
     payment_method_types: ['card'],
+    mode: 'payment',
+    line_items: [
+      {
+        price_data: {
+          currency: 'bdt',
+          product_data: {
+            name: 'Crop Purchase',
+          },
+          unit_amount: amount, // MUST be integer (paisa)
+        },
+        quantity: 1,
+      },
+    ],
+    success_url: `${process.env.CLIENT_URL}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: `${process.env.CLIENT_URL}/payment-failed`,
+    metadata: {
+      cropId,
+      interestId,
+      sellerId,
+      buyerId: req.user.userId,
+      amount,
+    },
   });
 
-  res.send({
-    success: true,
-    clientSecret: intent.client_secret,
-  });
+  res.send({ url: session.url });
 });
 
 app.post('/payments/confirm', verifyJWT, async (req, res) => {
-  const { amount, cropId, interestId, sellerId, paymentIntentId } = req.body;
+  const { sessionId } = req.body;
+
+  const session = await stripe.checkout.sessions.retrieve(sessionId);
+
+  if (session.payment_status !== 'paid') {
+    return sendError(res, 400, 'PAYMENT_FAILED', 'Payment not completed');
+  }
+
+  const { cropId, interestId, sellerId, buyerId, amount } = session.metadata;
 
   const platformFee = Math.round(amount * 0.01);
 
   const db = await getDb();
   await db.collection('payments').insertOne({
-    userId: new ObjectId(req.user.userId),
+    userId: new ObjectId(buyerId),
     sellerId: new ObjectId(sellerId),
     cropId: new ObjectId(cropId),
     interestId,
-    amount,
+    amount: Number(amount),
     platformFee,
     sellerAmount: amount - platformFee,
     currency: 'bdt',
-    stripePaymentIntentId: paymentIntentId,
+    stripeSessionId: session.id,
     status: 'succeeded',
     createdAt: new Date(),
   });
