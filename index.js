@@ -308,6 +308,45 @@ app.patch('/interests/:cropId/:interestId', verifyJWT, async (req, res) => {
   res.send({ success: true });
 });
 
+app.get('/my-interests', verifyJWT, async (req, res) => {
+  const userEmail = req.user.email;
+
+  const db = await getDb();
+  const crops = db.collection('crops');
+
+  const interests = await crops
+    .aggregate([
+      { $unwind: '$interests' },
+      {
+        $match: {
+          'interests.userEmail': userEmail,
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          interestId: '$interests._id',
+          cropId: '$_id',
+          cropName: '$name',
+          cropImage: '$image',
+          ownerEmail: '$owner.ownerEmail',
+          ownerName: '$owner.ownerName',
+          quantity: '$interests.quantity',
+          pricePerUnit: '$pricePerUnit',
+          unit: '$unit',
+          status: '$interests.status',
+          createdAt: '$interests.createdAt',
+        },
+      },
+    ])
+    .toArray();
+
+  res.send({
+    success: true,
+    data: interests,
+  });
+});
+
 /* ============================================================
    PAYMENTS (Stripe )
 ============================================================ */
