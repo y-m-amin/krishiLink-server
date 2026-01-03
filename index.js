@@ -17,6 +17,8 @@ const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const app = express();
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
+const isValidObjectId = (id) => ObjectId.isValid(id);
+
 /* ============================================================
    GLOBAL MIDDLEWARE
 ============================================================ */
@@ -499,11 +501,26 @@ app.post('/payments/confirm', async (req, res) => {
     }
 
     const { cropId, interestId, sellerId, buyerId, amount } = session.metadata;
-    const platformFee = Math.round(amount * 0.01);
+
+    //  VALIDATION
+    if (
+      !isValidObjectId(cropId) ||
+      !isValidObjectId(interestId) ||
+      !isValidObjectId(sellerId) ||
+      !isValidObjectId(buyerId)
+    ) {
+      console.error('Invalid ObjectId in metadata:', session.metadata);
+      return sendError(
+        res,
+        400,
+        'INVALID_METADATA',
+        'Corrupted payment metadata'
+      );
+    }
 
     const db = await getDb();
 
-    //  IDMPOTENCY CHECK #1 (Stripe session)
+    //  Idempotency
     const existingPayment = await db.collection('payments').findOne({
       stripeSessionId: session.id,
     });
@@ -512,26 +529,17 @@ app.post('/payments/confirm', async (req, res) => {
       return res.send({ success: true, alreadyConfirmed: true });
     }
 
-    //  IDMPOTENCY CHECK #2 (Interest already paid)
-    const alreadyPaid = await db.collection('crops').findOne({
-      _id: new ObjectId(cropId),
-      'interests._id': new ObjectId(interestId),
-      'interests.paymentStatus': 'paid',
-    });
-
-    if (alreadyPaid) {
-      return res.send({ success: true, alreadyConfirmed: true });
-    }
+    const platformFee = Math.round(Number(amount) * 0.01);
 
     //  Insert payment
     await db.collection('payments').insertOne({
       userId: new ObjectId(buyerId),
       sellerId: new ObjectId(sellerId),
       cropId: new ObjectId(cropId),
-      interestId,
+      interestId: new ObjectId(interestId), // 🔥 STORE AS ObjectId
       amount: Number(amount),
       platformFee,
-      sellerAmount: amount - platformFee,
+      sellerAmount: Number(amount) - platformFee,
       currency: 'bdt',
       stripeSessionId: session.id,
       status: 'succeeded',
@@ -539,7 +547,7 @@ app.post('/payments/confirm', async (req, res) => {
     });
 
     //  Update interest
-    await db.collection('crops').updateOne(
+    const updateResult = await db.collection('crops').updateOne(
       {
         _id: new ObjectId(cropId),
         'interests._id': new ObjectId(interestId),
@@ -552,12 +560,18 @@ app.post('/payments/confirm', async (req, res) => {
       }
     );
 
+    if (updateResult.matchedCount === 0) {
+      console.error('Interest not found for payment:', interestId);
+      return sendError(res, 404, 'INTEREST_NOT_FOUND', 'Interest not found');
+    }
+
     res.send({ success: true });
   } catch (err) {
     console.error('Payment confirm error:', err);
-    res
-      .status(500)
-      .send({ success: false, message: 'Payment confirmation failed' });
+    res.status(500).send({
+      success: false,
+      message: 'Payment confirmation failed',
+    });
   }
 });
 
