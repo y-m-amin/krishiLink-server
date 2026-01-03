@@ -258,6 +258,8 @@ app.delete('/crops/:id', verifyJWT, async (req, res) => {
 ============================================================ */
 app.post('/crops/:id/interests', verifyJWT, async (req, res) => {
   const { quantity, message = '' } = req.body;
+  const email = req.user.email; // from JWT
+  const user = await users.findOne({ email });
 
   //  Validate quantity
   if (!quantity || quantity < 1) {
@@ -296,12 +298,12 @@ app.post('/crops/:id/interests', verifyJWT, async (req, res) => {
   const interest = {
     _id: new ObjectId(),
     cropId: cropId.toString(),
-    userEmail: req.user.email,
-    userName: req.user.name || 'Unknown',
+    userEmail: email,
+    userName: user?.displayName || user?.name || email.split('@')[0],
     quantity,
     message,
-    status: 'pending', // pending | accepted | rejected
-    paymentStatus: 'unpaid', // unpaid | paid
+    status: 'pending',
+    paymentStatus: 'unpaid',
     createdAt: new Date(),
   };
 
@@ -497,11 +499,31 @@ app.post('/payments/confirm', verifyJWT, async (req, res) => {
     }
 
     const { cropId, interestId, sellerId, buyerId, amount } = session.metadata;
-
     const platformFee = Math.round(amount * 0.01);
 
     const db = await getDb();
 
+    //  IDMPOTENCY CHECK #1 (Stripe session)
+    const existingPayment = await db.collection('payments').findOne({
+      stripeSessionId: session.id,
+    });
+
+    if (existingPayment) {
+      return res.send({ success: true, alreadyConfirmed: true });
+    }
+
+    //  IDMPOTENCY CHECK #2 (Interest already paid)
+    const alreadyPaid = await db.collection('crops').findOne({
+      _id: new ObjectId(cropId),
+      'interests._id': new ObjectId(interestId),
+      'interests.paymentStatus': 'paid',
+    });
+
+    if (alreadyPaid) {
+      return res.send({ success: true, alreadyConfirmed: true });
+    }
+
+    //  Insert payment
     await db.collection('payments').insertOne({
       userId: new ObjectId(buyerId),
       sellerId: new ObjectId(sellerId),
@@ -516,6 +538,7 @@ app.post('/payments/confirm', verifyJWT, async (req, res) => {
       createdAt: new Date(),
     });
 
+    //  Update interest
     await db.collection('crops').updateOne(
       {
         _id: new ObjectId(cropId),
