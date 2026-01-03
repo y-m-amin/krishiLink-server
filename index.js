@@ -345,6 +345,17 @@ app.patch('/interests/:cropId/:interestId', verifyJWT, async (req, res) => {
     return sendError(res, 404, 'NOT_FOUND', 'Interest not found');
   }
 
+  if (status === 'accepted') {
+    if (interest.quantity > crop.quantity) {
+      return sendError(res, 400, 'OUT_OF_STOCK', 'Insufficient quantity');
+    }
+
+    await crops.updateOne(
+      { _id: cropId },
+      { $inc: { quantity: -interest.quantity } } // ✅ reduce stock
+    );
+  }
+
   //  Prevent re-processing
   if (interest.status !== 'pending') {
     return sendError(res, 400, 'INVALID_STATE', 'Interest already processed');
@@ -394,26 +405,25 @@ app.get('/my-interests', verifyJWT, async (req, res) => {
         $project: {
           _id: 0,
 
-          // IDs
           interestId: '$interests._id',
           cropId: '$_id',
 
-          // Crop info
           cropName: '$name',
           cropImage: '$image',
           unit: '$unit',
 
-          // Seller info
+          sellerId: '$owner.ownerId',
           sellerEmail: '$owner.ownerEmail',
           sellerName: '$owner.ownerName',
 
-          // Pricing
           quantity: '$interests.quantity',
+          message: '$interests.message',
+
           pricePerUnit: '$pricePerUnit',
           totalAmount: 1,
 
-          // Status
           status: '$interests.status',
+          paymentStatus: '$interests.paymentStatus',
         },
       },
     ])
@@ -453,7 +463,7 @@ app.post('/payments/create', verifyJWT, async (req, res) => {
           product_data: {
             name: 'Crop Purchase',
           },
-          unit_amount: amount,
+          unit_amount: Math.round(amount),
         },
         quantity: 1,
       },
@@ -499,6 +509,19 @@ app.post('/payments/confirm', verifyJWT, async (req, res) => {
     status: 'succeeded',
     createdAt: new Date(),
   });
+
+  await db.collection('crops').updateOne(
+    {
+      _id: new ObjectId(cropId),
+      'interests._id': new ObjectId(interestId),
+    },
+    {
+      $set: {
+        'interests.$.paymentStatus': 'paid',
+        'interests.$.paidAt': new Date(),
+      },
+    }
+  );
 
   res.send({ success: true });
 });
