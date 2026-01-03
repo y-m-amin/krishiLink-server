@@ -484,7 +484,7 @@ app.post('/payments/create', verifyJWT, async (req, res) => {
   res.send({ url: session.url });
 });
 
-app.post('/payments/confirm', verifyJWT, async (req, res) => {
+app.post('/payments/confirm', async (req, res) => {
   try {
     const { sessionId } = req.body;
 
