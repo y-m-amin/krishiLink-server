@@ -483,47 +483,59 @@ app.post('/payments/create', verifyJWT, async (req, res) => {
 });
 
 app.post('/payments/confirm', verifyJWT, async (req, res) => {
-  const { sessionId } = req.body;
+  try {
+    const { sessionId } = req.body;
 
-  const session = await stripe.checkout.sessions.retrieve(sessionId);
-
-  if (session.payment_status !== 'paid') {
-    return sendError(res, 400, 'PAYMENT_FAILED', 'Payment not completed');
-  }
-
-  const { cropId, interestId, sellerId, buyerId, amount } = session.metadata;
-
-  const platformFee = Math.round(amount * 0.01);
-
-  const db = await getDb();
-  await db.collection('payments').insertOne({
-    userId: new ObjectId(buyerId),
-    sellerId: new ObjectId(sellerId),
-    cropId: new ObjectId(cropId),
-    interestId,
-    amount: Number(amount),
-    platformFee,
-    sellerAmount: amount - platformFee,
-    currency: 'bdt',
-    stripeSessionId: session.id,
-    status: 'succeeded',
-    createdAt: new Date(),
-  });
-
-  await db.collection('crops').updateOne(
-    {
-      _id: new ObjectId(cropId),
-      'interests._id': new ObjectId(interestId),
-    },
-    {
-      $set: {
-        'interests.$.paymentStatus': 'paid',
-        'interests.$.paidAt': new Date(),
-      },
+    if (!sessionId) {
+      return sendError(res, 400, 'INVALID_SESSION', 'Session ID missing');
     }
-  );
 
-  res.send({ success: true });
+    const session = await stripe.checkout.sessions.retrieve(sessionId);
+
+    if (session.payment_status !== 'paid') {
+      return sendError(res, 400, 'PAYMENT_FAILED', 'Payment not completed');
+    }
+
+    const { cropId, interestId, sellerId, buyerId, amount } = session.metadata;
+
+    const platformFee = Math.round(amount * 0.01);
+
+    const db = await getDb();
+
+    await db.collection('payments').insertOne({
+      userId: new ObjectId(buyerId),
+      sellerId: new ObjectId(sellerId),
+      cropId: new ObjectId(cropId),
+      interestId,
+      amount: Number(amount),
+      platformFee,
+      sellerAmount: amount - platformFee,
+      currency: 'bdt',
+      stripeSessionId: session.id,
+      status: 'succeeded',
+      createdAt: new Date(),
+    });
+
+    await db.collection('crops').updateOne(
+      {
+        _id: new ObjectId(cropId),
+        'interests._id': new ObjectId(interestId),
+      },
+      {
+        $set: {
+          'interests.$.paymentStatus': 'paid',
+          'interests.$.paidAt': new Date(),
+        },
+      }
+    );
+
+    res.send({ success: true });
+  } catch (err) {
+    console.error('Payment confirm error:', err);
+    res
+      .status(500)
+      .send({ success: false, message: 'Payment confirmation failed' });
+  }
 });
 
 /* ============================================================
