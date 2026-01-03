@@ -323,19 +323,36 @@ app.get('/my-interests', verifyJWT, async (req, res) => {
         },
       },
       {
+        $addFields: {
+          totalAmount: {
+            $multiply: ['$interests.quantity', '$pricePerUnit'],
+          },
+        },
+      },
+      {
         $project: {
           _id: 0,
+
+          // IDs
           interestId: '$interests._id',
           cropId: '$_id',
+
+          // Crop info
           cropName: '$name',
           cropImage: '$image',
-          ownerEmail: '$owner.ownerEmail',
-          ownerName: '$owner.ownerName',
+          unit: '$unit',
+
+          // Seller info
+          sellerEmail: '$owner.ownerEmail',
+          sellerName: '$owner.ownerName',
+
+          // Pricing
           quantity: '$interests.quantity',
           pricePerUnit: '$pricePerUnit',
-          unit: '$unit',
+          totalAmount: 1,
+
+          // Status
           status: '$interests.status',
-          createdAt: '$interests.createdAt',
         },
       },
     ])
