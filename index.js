@@ -259,62 +259,65 @@ app.delete('/crops/:id', verifyJWT, async (req, res) => {
    INTERESTS
 ============================================================ */
 app.post('/crops/:id/interests', verifyJWT, async (req, res) => {
-  const { quantity, message = '' } = req.body;
-  const email = req.user.email; // from JWT
-  const user = await users.findOne({ email });
+  try {
+    const { quantity, message = '' } = req.body;
+    const email = req.user.email;
 
-  //  Validate quantity
-  if (!quantity || quantity < 1) {
-    return sendError(res, 400, 'VALIDATION_ERROR', 'Invalid quantity');
+    if (!quantity || quantity < 1) {
+      return sendError(res, 400, 'VALIDATION_ERROR', 'Invalid quantity');
+    }
+
+    const db = await getDb();
+    const crops = db.collection('crops');
+    const users = db.collection('users'); // ✅ FIX
+
+    const user = await users.findOne({ email });
+
+    const cropId = new ObjectId(req.params.id);
+    const crop = await crops.findOne({ _id: cropId });
+
+    if (!crop) {
+      return sendError(res, 404, 'NOT_FOUND', 'Crop not found');
+    }
+
+    // Prevent owner from sending interest
+    if (crop.owner?.ownerEmail === email) {
+      return sendError(res, 403, 'FORBIDDEN', 'Owner cannot send interest');
+    }
+
+    // Check stock
+    if (quantity > crop.quantity) {
+      return sendError(res, 400, 'OUT_OF_STOCK', 'Insufficient quantity');
+    }
+
+    // Prevent duplicate interest
+    const alreadySent = crop.interests?.some((i) => i.userEmail === email);
+    if (alreadySent) {
+      return sendError(res, 400, 'DUPLICATE', 'Interest already sent');
+    }
+
+    const interest = {
+      _id: new ObjectId(),
+      cropId: cropId.toString(),
+      userEmail: email,
+      userName: user?.displayName || user?.name || email.split('@')[0],
+      quantity,
+      message,
+      status: 'pending',
+      paymentStatus: 'unpaid',
+      createdAt: new Date(),
+    };
+
+    await crops.updateOne({ _id: cropId }, { $push: { interests: interest } });
+
+    res.status(201).send({
+      success: true,
+      message: 'Interest submitted successfully',
+    });
+  } catch (error) {
+    console.error(error);
+    sendError(res, 500, 'SERVER_ERROR', 'Failed to send interest');
   }
-
-  const db = await getDb();
-  const crops = db.collection('crops');
-
-  const cropId = new ObjectId(req.params.id);
-  const crop = await crops.findOne({ _id: cropId });
-
-  if (!crop) {
-    return sendError(res, 404, 'NOT_FOUND', 'Crop not found');
-  }
-
-  //  Prevent owner from sending interest
-  if (crop.owner?.ownerEmail === req.user.email) {
-    return sendError(res, 403, 'FORBIDDEN', 'Owner cannot send interest');
-  }
-
-  // Check stock
-  if (quantity > crop.quantity) {
-    return sendError(res, 400, 'OUT_OF_STOCK', 'Insufficient quantity');
-  }
-
-  //  Prevent duplicate interest
-  const alreadySent = crop.interests?.some(
-    (i) => i.userEmail === req.user.email
-  );
-  if (alreadySent) {
-    return sendError(res, 400, 'DUPLICATE', 'Interest already sent');
-  }
-
-  //  Create SAFE interest object
-  const interest = {
-    _id: new ObjectId(),
-    cropId: cropId.toString(),
-    userEmail: email,
-    userName: user?.displayName || user?.name || email.split('@')[0],
-    quantity,
-    message,
-    status: 'pending',
-    paymentStatus: 'unpaid',
-    createdAt: new Date(),
-  };
-
-  await crops.updateOne({ _id: cropId }, { $push: { interests: interest } });
-
-  res.status(201).send({
-    success: true,
-    message: 'Interest submitted successfully',
-  });
 });
 
 app.patch('/interests/:cropId/:interestId', verifyJWT, async (req, res) => {
