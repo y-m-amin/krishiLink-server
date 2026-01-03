@@ -257,7 +257,9 @@ app.delete('/crops/:id', verifyJWT, async (req, res) => {
    INTERESTS
 ============================================================ */
 app.post('/crops/:id/interests', verifyJWT, async (req, res) => {
-  const { quantity } = req.body;
+  const { quantity, message = '' } = req.body;
+
+  //  Validate quantity
   if (!quantity || quantity < 1) {
     return sendError(res, 400, 'VALIDATION_ERROR', 'Invalid quantity');
   }
@@ -265,47 +267,106 @@ app.post('/crops/:id/interests', verifyJWT, async (req, res) => {
   const db = await getDb();
   const crops = db.collection('crops');
 
-  const crop = await crops.findOne({ _id: new ObjectId(req.params.id) });
-  if (!crop) return sendError(res, 404, 'NOT_FOUND', 'Crop not found');
+  const cropId = new ObjectId(req.params.id);
+  const crop = await crops.findOne({ _id: cropId });
 
-  const already = crop.interests?.some((i) => i.userEmail === req.user.email);
-  if (already) {
+  if (!crop) {
+    return sendError(res, 404, 'NOT_FOUND', 'Crop not found');
+  }
+
+  //  Prevent owner from sending interest
+  if (crop.owner?.ownerEmail === req.user.email) {
+    return sendError(res, 403, 'FORBIDDEN', 'Owner cannot send interest');
+  }
+
+  // Check stock
+  if (quantity > crop.quantity) {
+    return sendError(res, 400, 'OUT_OF_STOCK', 'Insufficient quantity');
+  }
+
+  //  Prevent duplicate interest
+  const alreadySent = crop.interests?.some(
+    (i) => i.userEmail === req.user.email
+  );
+  if (alreadySent) {
     return sendError(res, 400, 'DUPLICATE', 'Interest already sent');
   }
 
+  //  Create SAFE interest object
   const interest = {
     _id: new ObjectId(),
-    ...req.body,
+    cropId: cropId.toString(),
     userEmail: req.user.email,
-    status: 'pending',
+    userName: req.user.name || 'Unknown',
+    quantity,
+    message,
+    status: 'pending', // pending | accepted | rejected
+    paymentStatus: 'unpaid', // unpaid | paid
+    createdAt: new Date(),
   };
 
-  await crops.updateOne({ _id: crop._id }, { $push: { interests: interest } });
+  await crops.updateOne({ _id: cropId }, { $push: { interests: interest } });
 
-  res.status(201).send({ success: true });
+  res.status(201).send({
+    success: true,
+    message: 'Interest submitted successfully',
+  });
 });
 
 app.patch('/interests/:cropId/:interestId', verifyJWT, async (req, res) => {
-  const { status, reduceQuantityBy } = req.body;
+  const { status } = req.body;
+
+  if (!['accepted', 'rejected'].includes(status)) {
+    return sendError(res, 400, 'VALIDATION_ERROR', 'Invalid status');
+  }
+
   const db = await getDb();
   const crops = db.collection('crops');
 
-  await crops.updateOne(
-    {
-      _id: new ObjectId(req.params.cropId),
-      'interests._id': new ObjectId(req.params.interestId),
-    },
-    { $set: { 'interests.$.status': status } }
-  );
+  const cropId = new ObjectId(req.params.cropId);
+  const interestId = new ObjectId(req.params.interestId);
 
-  if (status === 'accepted' && reduceQuantityBy > 0) {
-    await crops.updateOne(
-      { _id: new ObjectId(req.params.cropId) },
-      { $inc: { quantity: -reduceQuantityBy } }
-    );
+  const crop = await crops.findOne({ _id: cropId });
+
+  if (!crop) {
+    return sendError(res, 404, 'NOT_FOUND', 'Crop not found');
   }
 
-  res.send({ success: true });
+  // Only owner can accept/reject
+  if (crop.owner?.ownerEmail !== req.user.email) {
+    return sendError(res, 403, 'FORBIDDEN', 'Not authorized');
+  }
+
+  const interest = crop.interests?.find(
+    (i) => i._id.toString() === interestId.toString()
+  );
+
+  if (!interest) {
+    return sendError(res, 404, 'NOT_FOUND', 'Interest not found');
+  }
+
+  //  Prevent re-processing
+  if (interest.status !== 'pending') {
+    return sendError(res, 400, 'INVALID_STATE', 'Interest already processed');
+  }
+
+  await crops.updateOne(
+    {
+      _id: cropId,
+      'interests._id': interestId,
+    },
+    {
+      $set: {
+        'interests.$.status': status,
+        'interests.$.updatedAt': new Date(),
+      },
+    }
+  );
+
+  res.send({
+    success: true,
+    message: `Interest ${status}`,
+  });
 });
 
 app.get('/my-interests', verifyJWT, async (req, res) => {
@@ -392,7 +453,7 @@ app.post('/payments/create', verifyJWT, async (req, res) => {
           product_data: {
             name: 'Crop Purchase',
           },
-          unit_amount: amount, // MUST be integer (paisa)
+          unit_amount: amount,
         },
         quantity: 1,
       },
